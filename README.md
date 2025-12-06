@@ -80,13 +80,18 @@
 
 ```
 llm_basics_project/
-├── data/
-│   └── dataset/              # Сэмплы данных
-├── docs/
+├── agents/                   # Реализация агентов
+│   └── tutor/               # Агент-тьютор
+│       ├── __init__.py      # Экспорт основных классов
+│       ├── tutor_agent.py   # Основной агент-тьютор
+│       └── tools.py         # Инструменты помощи студентам
+├── data/                     # Данные проекта
+│   └── dataset/             # Сэмплы данных
+├── docs/                     # Документация
 │   ├── AGENT_ARCHITECTURE.md           # Архитектура агентов
 │   ├── ev_tools_specification.md       # Спецификация инструментов оценщика
 │   └── tut_tools_specification.md      # Спецификация инструментов тьютора
-├── reports/
+├── reports/                  # Отчеты по проекту
 │   └── checkpoint_1.md      # Отчет Checkpoint №1
 └── README.md                 # Этот файл
 ```
