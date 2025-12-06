@@ -23,10 +23,17 @@
   - Агент-оценщик - более качественная обратная связь по выполнению задания
 
 ### 1.3. Данные школы кайтсерфинга (RAG-симулятор)
-- **Источник**: Данные сгенерированы для симулятора курса. Формат данных определен участниками проекта.
-- **Содержание**: Специфичные данные для чат-бота WindChaser, информация о школе кайтсерфинга "WindChaser", данные для RAG-симулятора (база знаний чат-бота)
-- **Процесс получения**: Данные структурированы в PostgreSQL (схема Kiteboarding Schema), используются для создания базы знаний RAG-симулятора. Chunking выполняется на уровне LangFlow при создании векторной базы знаний.
-- **Доступ**: Через PostgreSQL базу данных
+- **Источник**: Wikipedia статьи по кайтсёрфингу (русскоязычная версия), собранные через LangChain WikipediaRetriever
+- **Содержание**: 
+  - **PUBLIC индекс** (36 seed-запросов): основы кайтсерфинга, оборудование, водные виды спорта, безопасность, кайт-споты, ветровые условия, погода
+  - **PRIVATE индекс** (30 seed-запросов): методики обучения, спортивная подготовка, травматология, физическая подготовка, психология спорта, риск-менеджмент
+- **Процесс получения**: 
+  1. Сбор документов из Wikipedia через LangChain WikipediaRetriever
+  2. Дедупликация документов по контенту
+  3. Чанкинг с помощью RecursiveCharacterTextSplitter (chunk_size=1000, overlap=150)
+  4. Построение FAISS индекса с sentence-transformers embeddings (модель: all-MiniLM-L6-v2)
+  5. Сохранение индекса на диск (FAISS + метаданные)
+- **Доступ**: Через FAISS векторные индексы в папке `data/faiss_kitesurf_wiki/`
 - **Использование**: 
   - LangFlow flows для создания RAG-симулятора
   - Практика студентов на реальном чат-боте клуба по кайтсёрфингу
@@ -57,6 +64,23 @@ PostgreSQL Database
     └── Данные для чат-бота WindChaser (RAG-симулятор)
 ```
 
+**FAISS векторные индексы** (локальное файловое хранилище):
+- **Расположение**: `data/faiss_kitesurf_wiki/`
+- **Компоненты**: Векторный индекс FAISS + метаданные документов (PKL)
+- **Модель embeddings**: sentence-transformers/all-MiniLM-L6-v2
+- **Требования**: ~500 MB для модели embeddings
+
+**Структура FAISS индексов**:
+```
+data/faiss_kitesurf_wiki/
+├── public/                    # Публичный индекс (общедоступная информация)
+│   ├── index.faiss           # FAISS векторный индекс
+│   └── index.pkl             # Метаданные документов и чанков
+└── private/                   # Приватный индекс (профессиональная/методическая)
+    ├── index.faiss           # FAISS векторный индекс
+    └── index.pkl             # Метаданные документов и чанков
+```
+
 **MinIO** (S3-совместимое хранилище, Docker контейнер `windchasersecurity-minio`):
 - **Назначение**: Хранение файлов (отчёты о безопасности, логи атак и защит, пользовательские данные, сообщения и flows)
 - **Подключение**: Endpoint `minio:9000`, Bucket `${MINIO_BUCKET_NAME:-windchasersecurity}`
@@ -77,19 +101,27 @@ MinIO Bucket: windchasersecurity
 
 ✅ **Схема заданий (Course DB)**: Данные структурированы и хранятся в PostgreSQL (таблицы для курсов, студентов, заданий, доступ через SQLAlchemy ORM)
 
-✅ **Данные школы кайтсерфинга (Kiteboarding Schema)**: Данные подготовлены для использования в RAG-симуляторе (схема определена в PostgreSQL, используются в LangFlow flows)
+✅ **Данные школы кайтсерфинга (FAISS индексы)**: Данные собраны из Wikipedia, обработаны и индексированы. Готовы два типа индексов (PUBLIC и PRIVATE) для использования в RAG-симуляторе. Поддержка поиска, инспекции и экспорта в JSON.
 
 ⚠️ **База с теорией**: В процессе интеграции (структура данных определена, функции доступа запланированы к реализации)
 
 ## 3. Подготовка для RAG и агентов
 
 **Для RAG-симулятора**:
-- Данные школы кайтсерфинга структурированы в PostgreSQL (Kiteboarding Schema)
-- Используются в LangFlow flows через стандартные узлы LangFlow
-- **Chunking выполняется на уровне LangFlow** при создании векторной базы знаний
+- Данные собираются из Wikipedia через LangChain WikipediaRetriever
+- **Chunking выполняется через RecursiveCharacterTextSplitter** (размер чанка: 1000 символов, перекрытие: 150 символов)
+- Векторные представления создаются с помощью sentence-transformers (модель: all-MiniLM-L6-v2)
+- FAISS индексы сохраняются на диск в папке `data/faiss_kitesurf_wiki/`
+- Поддерживаются операции: поиск по семантике, инспекция содержимого, экспорт в JSON
 - Каждый студент получает индивидуальный flow с чат-ботом
 
-Данные хранятся в PostgreSQL → при создании flow в LangFlow извлекаются и обрабатываются → LangFlow выполняет chunking и создание векторных представлений → векторная база знаний используется для поиска
+**Процесс подготовки данных**:
+1. Wikipedia статьи → LangChain WikipediaRetriever
+2. Дедупликация документов по контенту
+3. RecursiveCharacterTextSplitter → чанки текста
+4. sentence-transformers → векторные представления
+5. FAISS индекс → быстрый семантический поиск
+6. Интеграция с LangFlow flows для RAG-симулятора
 
 **Для агентов**:
 - Схема заданий структурирована в PostgreSQL (Course DB), доступна через SQLAlchemy ORM, используется через API backend
@@ -112,24 +144,54 @@ MinIO Bucket: windchasersecurity
 
 ### Доступ к данным:
 - **Для агентов**: Схема заданий через FastAPI backend (`DATABASE_URL`), база знаний планируется через модуль `agents/evaluator/context.py` или `agents/tutor/context.py`
-- **Для RAG-симулятора**: Данные школы кайтсерфинга через PostgreSQL (Kiteboarding Schema), использование в LangFlow flows через стандартные узлы
+- **Для RAG-симулятора**: FAISS векторные индексы (`data/faiss_kitesurf_wiki/`), интеграция с LangFlow flows через стандартные узлы векторного поиска
+- **Для инспекции данных**: Скрипты `inspect_faiss_index.py` (просмотр, поиск) и `export_faiss_to_json.py` (экспорт в JSON)
 
 ### Сэмпл данных
 
-**Ссылка на папку с сэмплом собранных данных**
+**Расположение собранных данных**:
+- Папка `data/faiss_kitesurf_wiki/` - FAISS векторные индексы (PUBLIC и PRIVATE)
 
- Папка `/dataset/` 
+**Для просмотра реальных данных**:
 
-**Для просмотра реальных данных**: 
+```bash
+# Просмотр статистики и содержимого PUBLIC индекса
+cd data
+python inspect_faiss_index.py --index_dir ./faiss_kitesurf_wiki/public
 
-инструкция
+# Просмотр первых 3 чанков с полным содержимым
+python inspect_faiss_index.py --index_dir ./faiss_kitesurf_wiki/public --show_full 3
+
+# Поиск по индексу
+python inspect_faiss_index.py --index_dir ./faiss_kitesurf_wiki/public \
+    --search "ветровые условия" --search_k 5
+
+# Экспорт в JSON для анализа
+python export_faiss_to_json.py --index_dir ./faiss_kitesurf_wiki/public \
+    --output ./chunks_public.json
+```
+
+**Для пересоздания индексов**:
+
+```bash
+cd data
+# Создать оба индекса (PUBLIC и PRIVATE)
+python build_faiss_wiki.py --lang ru --index_dir ./faiss_kitesurf_wiki
+
+# Создать только PUBLIC индекс
+python build_faiss_wiki.py --index_type public --index_dir ./faiss_kitesurf_wiki
+```
 
 ### Объём данных
 
 **PostgreSQL база данных**:
-- **Course DB**: 
-- **Langflow DB**: 
-- **Kiteboarding Schema**: 
+- **Course DB**: Данные курсов, студентов, заданий (динамический объём)
+- **Langflow DB**: Пользователи, flows, сообщения (динамический объём)
+- **Kiteboarding Schema**: Данные для чат-бота (по необходимости)
+
+**FAISS векторные индексы**:
+- **PUBLIC индекс**: 36 seed-запросов Wikipedia → чанки текста + векторные представления
+- **PRIVATE индекс**: 30 seed-запросов Wikipedia → чанки текста + векторные представления
 
 **MinIO хранилище**: Отчёты и логи создаются динамически при работе системы, объём зависит от активности студентов и количества выполненных заданий
 
