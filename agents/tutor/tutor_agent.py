@@ -5,9 +5,29 @@
 """
 
 import os
+import sys
 from typing import Dict, Any, Optional, List
 import json
 from openai import OpenAI
+from pathlib import Path
+
+# Добавляем корневую директорию проекта в путь для импорта config
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+try:
+    from config import get_tutor_config, get_api_key
+except ImportError:
+    # Fallback если config не найден
+    def get_tutor_config(**overrides):
+        return {
+            "llm_model": "gpt-4o",
+            "temperature": 0.5,
+            "max_tokens": 2500,
+            "base_url": "https://api.openai.com/v1",
+            **overrides
+        }
+    def get_api_key():
+        return os.environ.get("OPENAI_API_KEY") or os.environ.get("API_KEY")
 
 from agents.tutor.tools import get_helper
 
@@ -25,34 +45,51 @@ class TutorAgent:
 
     def __init__(
         self,
-        llm_model: str = "GigaChat/GigaChat-2-Max",
-        temperature: float = 0.5,
+        llm_model: Optional[str] = None,
+        temperature: Optional[float] = None,
         api_key: Optional[str] = None,
-        base_url: str = "https://foundation-models.api.cloud.ru/v1",
-        max_tokens: int = 2500,
+        base_url: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ):
         """
         Инициализация агента-тьютора.
 
         Args:
-            llm_model: Модель LLM для использования
-            temperature: Температура для генерации
-            api_key: API ключ для LLM провайдера
-            base_url: Базовый URL API
-            max_tokens: Максимальное количество токенов для ответа
+            llm_model: Модель LLM для использования (по умолчанию из config)
+            temperature: Температура для генерации (по умолчанию из config)
+            api_key: API ключ для LLM провайдера (по умолчанию из переменной окружения)
+            base_url: Базовый URL API (по умолчанию из config)
+            max_tokens: Максимальное количество токенов для ответа (по умолчанию из config)
         """
-        self.llm_model = llm_model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
+        # Загрузка конфигурации с возможностью переопределения
+        # Передаем только не-None значения для переопределения
+        overrides = {}
+        if llm_model is not None:
+            overrides["llm_model"] = llm_model
+        if temperature is not None:
+            overrides["temperature"] = temperature
+        if base_url is not None:
+            overrides["base_url"] = base_url
+        if max_tokens is not None:
+            overrides["max_tokens"] = max_tokens
+        
+        config = get_tutor_config(**overrides)
+        
+        self.llm_model = config["llm_model"]
+        self.temperature = config["temperature"]
+        self.max_tokens = config["max_tokens"]
 
-        # Инициализация GigaChat клиента
-        self.api_key = api_key or os.environ.get("API_KEY")
+        # Инициализация OpenAI клиента
+        self.api_key = api_key or get_api_key()
         if not self.api_key:
-            raise ValueError("API_KEY должен быть предоставлен через параметр или переменную окружения")
+            raise ValueError(
+                "API_KEY должен быть предоставлен через параметр или переменную окружения "
+                "(OPENAI_API_KEY или API_KEY)"
+            )
 
         self.client = OpenAI(
             api_key=self.api_key,
-            base_url=base_url,
+            base_url=config["base_url"],
         )
         
         # Определение доступных инструментов для агента
@@ -154,9 +191,10 @@ class TutorAgent:
                 "function": {
                     "name": "analyze_student_stage",
                     "description": (
-                        "Анализирует этап работы студента над заданием. "
-                        "Используй этот инструмент, чтобы понять, на каком этапе находится студент "
-                        "(начало работы, в процессе, почти готово) и какие инструменты помощи нужны."
+                        "ОБЯЗАТЕЛЬНЫЙ инструмент: Анализирует этап работы студента над заданием. "
+                        "ВСЕГДА используй этот инструмент ПЕРВЫМ для определения этапа работы студента "
+                        "(initial - начало работы, developing - в процессе, reviewing - проверка). "
+                        "Результат анализа поможет выбрать правильные инструменты помощи."
                     ),
                     "parameters": {
                         "type": "object",
@@ -390,32 +428,35 @@ class TutorAgent:
                 "role": "system",
                 "content": """Ты - опытный преподаватель и наставник, помогающий студентам в изучении безопасности LLM и RAG-систем.
 
-Твоя задача - помочь студенту в выполнении задания, используя доступные инструменты.
+КРИТИЧЕСКИ ВАЖНО: Ты ДОЛЖЕН использовать доступные инструменты для помощи студенту. НЕ давай ответ напрямую без использования инструментов.
 
 Доступные типы заданий (модуль "Атаки"):
 - system_prompt_extraction: извлечение системного промпта из бота
 - knowledge_base_secret_extraction: извлечение секрета из базы знаний
 - token_limit_bypass: обход ограничения токенов
 
-Процесс помощи:
-1. Сначала проанализируй этап работы студента (используй analyze_student_stage)
-2. На основе этапа выбери подходящие инструменты помощи
-3. Если студенту нужна теория, используй provide_theory_context
-4. Используй специализированные инструменты помощи для конкретного типа задания
-5. ВАЖНО: Решай самостоятельно, нужно ли доспрашивать студента:
+ОБЯЗАТЕЛЬНЫЙ процесс помощи:
+1. ОБЯЗАТЕЛЬНО: Сначала вызови analyze_student_stage для анализа этапа работы студента
+2. На основе результата analyze_student_stage выбери подходящие инструменты:
+   - Если этап "initial" → используй provide_theory_context и help_* для типа задания
+   - Если этап "developing" → используй help_* для типа задания, возможно ask_guiding_question
+   - Если этап "reviewing" → используй help_* для финальной проверки
+3. ВАЖНО: Решай самостоятельно, нужно ли доспрашивать студента:
    - Если студент близок к решению, но нуждается в подсказке → используй ask_guiding_question
-   - Если студент задал неполный вопрос или нужно уточнить детали → задай наводящий вопрос
-   - Если студент застрял на определенном этапе → задай вопрос, который направит его к решению
-   - Если студент уже знает ответ, но хочет подтверждения → можешь дать прямую помощь
-6. Можешь задавать несколько вопросов последовательно, чтобы постепенно подвести студента к решению
-7. Адаптируй помощь под конкретную ситуацию студента
+   - Если студент задал неполный вопрос или нужно уточнить детали → задай наводящий вопрос через ask_guiding_question
+   - Если студент застрял на определенном этапе → задай вопрос через ask_guiding_question
+4. Можешь вызывать несколько инструментов последовательно для полной помощи
+5. Только после использования инструментов сформируй финальный ответ студенту
 
-Стратегия доспрашивания:
-- Используй ask_guiding_question, когда лучше направить студента через вопросы, чем давать готовый ответ
-- Задавай вопросы разного уровня подсказки (subtle, moderate, direct) в зависимости от того, насколько студент близок к решению
-- После получения ответа студента можешь продолжить диалог, задавая уточняющие вопросы или предоставляя более конкретную помощь
+Правила использования инструментов:
+- ВСЕГДА начинай с analyze_student_stage
+- Используй help_system_prompt_extraction для заданий по извлечению системного промпта
+- Используй help_knowledge_base_secret_extraction для заданий по извлечению секрета
+- Используй help_token_limit_bypass для заданий по обходу лимита токенов
+- Используй provide_theory_context когда студенту нужна теория
+- Используй ask_guiding_question для доспрашивания студента
 
-Будь поддерживающим, дружелюбным, но не давай готовое решение - направляй студента. 
+Будь поддерживающим, дружелюбным, но не давай готовое решение - направляй студента через инструменты. 
 Формулируй предложения, как преподаватель или ментор студента, обращаясь на ты"""
             },
             {
@@ -433,24 +474,42 @@ class TutorAgent:
 Требования к заданию:
 {json.dumps(assignment_requirements, ensure_ascii=False, indent=2)[:1000]}
 
-Начни с анализа этапа работы студента, затем выбери подходящие инструменты помощи."""
+ОБЯЗАТЕЛЬНО: Начни с вызова analyze_student_stage для анализа этапа работы студента. Затем используй подходящие инструменты помощи на основе результата анализа."""
             }
         ]
 
         # Цикл агента: планирование → действие → наблюдение → адаптация
         max_iterations = 5
         observations = []
+        final_response = None
         
         for iteration in range(max_iterations):
+            # Принудительное использование инструментов на первой итерации
+            tool_choice = "required" if iteration == 0 else "auto"
+            
             # Вызов LLM с инструментами
-            response = self.client.chat.completions.create(
-                model=self.llm_model,
-                messages=messages,
-                tools=self.tools,
-                tool_choice="auto",  # Агент сам выбирает инструменты
-                temperature=self.temperature,
-                max_tokens=self.max_tokens,
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.llm_model,
+                    messages=messages,
+                    tools=self.tools,
+                    tool_choice=tool_choice if iteration == 0 else "auto",  # Принудительно на первой итерации
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
+            except Exception as e:
+                # Если не поддерживается tool_choice="required", используем "auto"
+                if "required" in str(e).lower():
+                    response = self.client.chat.completions.create(
+                        model=self.llm_model,
+                        messages=messages,
+                        tools=self.tools,
+                        tool_choice="auto",
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                    )
+                else:
+                    raise
             
             message = response.choices[0].message
             messages.append(message)
@@ -479,12 +538,23 @@ class TutorAgent:
                         "content": json.dumps(tool_result, ensure_ascii=False)
                     })
             else:
+                # Если на первой итерации не вызвал инструмент, напоминаем
+                if iteration == 0:
+                    messages.append({
+                        "role": "assistant",
+                        "content": message.content or ""
+                    })
+                    messages.append({
+                        "role": "user",
+                        "content": "ВАЖНО: Ты должен использовать инструменты для помощи студенту. Начни с analyze_student_stage, затем используй подходящие инструменты помощи."
+                    })
+                    continue
                 # Агент завершил работу и дал финальный ответ
                 final_response = message.content
                 break
         
         # Если агент не завершил работу, используем последние наблюдения
-        if not message.content:
+        if not final_response:
             # Агент не дал финальный ответ, формируем его на основе наблюдений
             final_response = self._generate_final_help_from_observations(
                 observations, assignment_type, student_question, student_current_solution
@@ -520,6 +590,14 @@ class TutorAgent:
             if obs["tool"] == "ask_guiding_question":
                 guiding_questions.append(obs["result"])
         
+        # Извлечение информации о вызванных инструментах и этапе
+        tools_used = [obs["tool"] for obs in observations]
+        stage = None
+        for obs in observations:
+            if obs["tool"] == "analyze_student_stage" and isinstance(obs["result"], dict):
+                stage = obs["result"].get("stage", "unknown")
+                break
+        
         return {
             "help_text": final_response or help_result.get("help_text", ""),
             "examples": help_result.get("examples", []),
@@ -527,6 +605,8 @@ class TutorAgent:
             "theory_reference": help_result.get("theory_reference", ""),
             "guiding_questions": guiding_questions,  # Наводящие вопросы, если были заданы
             "needs_student_response": len(guiding_questions) > 0,  # Требуется ли ответ студента
+            "stage": stage,  # Определенный этап работы студента
+            "tools_used": tools_used,  # Список вызванных инструментов
             "agent_observations": observations,  # Для отладки
         }
 
@@ -583,10 +663,7 @@ if __name__ == "__main__":
     # API ключ берется из переменной окружения API_KEY
     print("Инициализация агента-тьютора...")
     try:
-        agent = TutorAgent(
-            llm_model="GigaChat/GigaChat-2-Max",
-            temperature=0.5,
-        )
+        agent = TutorAgent()
     except ValueError as e:
         print(f"\nОШИБКА: {e}")
         print("\nУстановите переменную окружения API_KEY перед запуском:")

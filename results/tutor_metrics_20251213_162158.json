@@ -1,0 +1,13 @@
+{
+  "agent_type": "tutor",
+  "timestamp": "20251213_162158",
+  "metrics": {
+    "total_cases": 100,
+    "stage_accuracy": 0.16,
+    "tool_selection_accuracy": 0.76,
+    "guiding_questions_usage": 0.36,
+    "correct_stage": 16,
+    "correct_tools": 76,
+    "used_guiding_questions": 36
+  }
+}

@@ -76,7 +76,7 @@
 ### EvaluatorAgent
 
 ```python
-agent = EvaluatorAgent(llm_model="GigaChat/GigaChat-2-Max")
+agent = EvaluatorAgent()  # Использует конфигурацию по умолчанию (GPT-4o)
 
 result = agent.evaluate(
     assignment_type="system_prompt_extraction",
@@ -95,7 +95,7 @@ result = agent.evaluate(
 ### TutorAgent
 
 ```python
-agent = TutorAgent(llm_model="GigaChat/GigaChat-2-Max")
+agent = TutorAgent()  # Использует конфигурацию по умолчанию (GPT-4o)
 
 result = agent.help_student(
     assignment_type="system_prompt_extraction",

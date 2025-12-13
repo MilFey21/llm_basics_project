@@ -1,0 +1,13 @@
+{
+  "agent_type": "evaluator",
+  "timestamp": "20251213_162449",
+  "metrics": {
+    "total_cases": 50,
+    "score_accuracy": 0.48,
+    "validator_selection_accuracy": 0.64,
+    "llm_analysis_usage": 0.96,
+    "score_in_range": 24,
+    "correct_validator": 32,
+    "used_llm_analysis": 48
+  }
+}
